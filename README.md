@@ -2,6 +2,47 @@
 
 Native C++ IDA Pro plugin for AI-powered binary analysis using Claude's tool_use API.
 
+## Features
+
+- **Native C++ plugin** — no Python runtime, no MCP bridge, no external dependencies at runtime. Single `.so` loaded directly by IDA.
+- **Built-in chat UI** — Qt-based chat panel embedded in IDA with markdown rendering, Catppuccin theming (dark/light), and configurable font size.
+- **Agentic tool-use loop** — the AI autonomously chains multiple tool calls per query (up to configurable max turns) to perform deep analysis.
+- **Multiple backends** — Claude (Anthropic), OpenAI-compatible APIs, and local LLMs (llama.cpp, Ollama, etc.).
+
+### Analysis Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_database_info` | Binary metadata — processor, bitness, file type, entry points |
+| `list_functions` | List/filter functions with pagination |
+| `get_function_info` | Detailed function info — size, frame, flags |
+| `get_disassembly` | Disassembly listing with bytes, addresses, and comments |
+| `decompile` | Hex-Rays decompilation (pseudocode) |
+| `get_xrefs_to` | Cross-references TO an address |
+| `get_xrefs_from` | Cross-references FROM an address |
+| `get_strings` | String search/listing with filtering and min-length |
+| `list_segments` | Binary segments/sections with permissions |
+| `get_bytes` | Raw byte reading at address |
+| `search_bytes` | Byte pattern search with wildcards (e.g. `"48 8B ?? ??"`) |
+| `get_names` | Named locations — functions, labels, imports, exports |
+
+### Modification Tools
+
+| Tool | Description |
+|------|-------------|
+| `rename_address` | Rename functions, labels, and addresses |
+| `rename_local_variable` | Rename variables in decompiled pseudocode |
+| `set_local_variable_type` | Change variable types in pseudocode |
+| `set_comment` | Add/edit disassembly comments |
+| `set_decompiler_comment` | Add/edit pseudocode comments |
+
+### Navigation Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_current_address` | Get cursor position in IDA |
+| `jump_to_address` | Navigate IDA disassembly view to address |
+
 ## Prerequisites
 
 - **IDA Pro 9.x** (with SDK from [GitHub](https://github.com/HexRaysSA/ida-sdk))
@@ -140,28 +181,3 @@ export IDA_CHAT_API_URL=http://localhost:8080/v1/chat/completions
 - "Find strings related to passwords"
 - "Rename this function to `process_input`"
 
-## Available Tools
-
-The agent has access to 19 IDA SDK tools:
-
-| Tool | Description |
-|------|-------------|
-| `get_database_info` | Binary metadata (processor, bits, entry points) |
-| `list_functions` | List/filter functions with pagination |
-| `get_function_info` | Detailed function info (frame, flags) |
-| `get_disassembly` | Disassembly listing |
-| `decompile` | Hex-Rays decompilation (if available) |
-| `get_xrefs_to` | Cross-references TO an address |
-| `get_xrefs_from` | Cross-references FROM an address |
-| `get_strings` | String search/listing |
-| `list_segments` | Binary segments/sections |
-| `get_bytes` | Raw byte reading |
-| `search_bytes` | Byte pattern search with wildcards |
-| `get_names` | Named locations (labels, imports, exports) |
-| `rename_address` | Rename a location |
-| `set_comment` | Add comments to addresses |
-| `set_decompiler_comment` | Add comments to decompiled pseudocode |
-| `rename_local_variable` | Rename variables in decompiled pseudocode |
-| `set_local_variable_type` | Change variable types in pseudocode |
-| `get_current_address` | Get cursor position |
-| `jump_to_address` | Navigate IDA view |
