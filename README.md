@@ -49,21 +49,81 @@ cp /path/to/idasdk/src/bin/plugins/ida-chat.so ~/.idapro/plugins/
 
 ## Configuration
 
-The plugin reads the API key from:
+Settings can be changed via the in-plugin settings dialog (gear icon) or by editing the config file directly.
 
-1. `ANTHROPIC_API_KEY` environment variable (highest priority)
-2. `~/.idapro/ida-chat.conf` file
+### Config file
 
-Config file format (`~/.idapro/ida-chat.conf`):
+Located at `~/.idapro/ida-chat.conf`, using `key=value` format (lines starting with `#` are comments):
 
 ```
+# Backend: "claude" (default) or "openai"
+backend=claude
+
+# API key (required for Claude, optional for local LLMs)
 api_key=sk-ant-...
+
+# API URL (only needed for OpenAI-compatible backends, ignored for Claude)
+api_url=http://localhost:8080/v1/chat/completions
+
+# Model name sent in API requests
 model=claude-sonnet-4-20250514
+
+# Max agentic loop iterations per user message
 max_turns=20
+
+# Max tokens per API response
 max_tokens=8192
+
+# Tool output caps (tune based on your context window size)
+max_disasm_lines=1000
+max_function_list=500
+max_bytes_read=4096
+
+# UI settings
+font_size=13
+dark_mode=true
 ```
 
-If no API key is found, a dialog will prompt you on first use.
+### Environment variables
+
+Environment variables override config file values:
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | API key (used for Claude backend) |
+| `OPENAI_API_KEY` | API key (used for OpenAI backend) |
+| `IDA_CHAT_BACKEND` | Backend selection: `claude` or `openai` |
+| `IDA_CHAT_API_URL` | Custom API URL |
+
+If no API key is found, a setup dialog will prompt you on first use.
+
+### Using a local LLM
+
+The plugin works with any local server that exposes an OpenAI-compatible `/v1/chat/completions` endpoint with tool/function calling support. Tested with [llama.cpp](https://github.com/ggerganov/llama.cpp) and [Ollama](https://ollama.com/).
+
+Example setup with llama.cpp:
+
+```bash
+# Start llama.cpp server
+llama-server -m qwen2.5-coder-7b.gguf --port 8080
+```
+
+Then configure the plugin:
+
+```
+backend=openai
+api_url=http://localhost:8080/v1/chat/completions
+model=qwen2.5-coder
+```
+
+Or via environment variables:
+
+```bash
+export IDA_CHAT_BACKEND=openai
+export IDA_CHAT_API_URL=http://localhost:8080/v1/chat/completions
+```
+
+**Note:** The API key is optional for local backends. The quality of tool calling depends heavily on the model — larger models (14B+) with tool-use training tend to work best.
 
 ## Usage
 
