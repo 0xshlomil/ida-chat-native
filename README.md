@@ -25,6 +25,11 @@ Native C++ IDA Pro plugin for AI-powered binary analysis using Claude's tool_use
 | `get_bytes` | Raw byte reading at address |
 | `search_bytes` | Byte pattern search with wildcards (e.g. `"48 8B ?? ??"`) |
 | `get_names` | Named locations — functions, labels, imports, exports |
+| `list_imports` | Imported symbols from external libraries with module names |
+| `get_callees` | Functions called by a given function (direct calls) |
+| `get_basic_blocks` | Basic blocks with control flow graph (successors/predecessors) |
+| `get_callgraph` | Build recursive call graph from root function |
+| `get_stack_frame` | Stack frame layout — locals, arguments, saved registers |
 
 ### Modification Tools
 
@@ -33,6 +38,9 @@ Native C++ IDA Pro plugin for AI-powered binary analysis using Claude's tool_use
 | `rename_address` | Rename functions, labels, and addresses |
 | `rename_local_variable` | Rename variables in decompiled pseudocode |
 | `set_local_variable_type` | Change variable types in pseudocode |
+| `set_function_type` | Apply function prototype/signature (return type, parameters, calling convention) |
+| `declare_type` | Declare custom C type (struct/union/typedef/enum) in local type library |
+| `define_function` | Create/define function at address where IDA missed one |
 | `set_comment` | Add/edit disassembly comments |
 | `set_decompiler_comment` | Add/edit pseudocode comments |
 

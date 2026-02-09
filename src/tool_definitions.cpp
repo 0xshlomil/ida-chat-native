@@ -247,6 +247,109 @@ json get_tool_definitions() {
                 }},
                 {"required", json::array({"address", "variable_name", "new_type"})}
             }}
+        },
+        // 20. list_imports
+        {
+            {"name", "list_imports"},
+            {"description", "List imported symbols from external modules/libraries. Returns module name, function name, and import address. Use offset and limit for pagination, or filter by module name."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"offset", {{"type", "integer"}, {"description", "Start index (default 0)"}}},
+                    {"limit", {{"type", "integer"}, {"description", "Max imports to return (default 100, max 500)"}}},
+                    {"module", {{"type", "string"}, {"description", "Filter by module name (case-insensitive, optional)"}}}
+                }},
+                {"required", json::array()}
+            }}
+        },
+        // 21. get_callees
+        {
+            {"name", "get_callees"},
+            {"description", "Get functions called by a given function (direct calls only). Returns callee addresses, names, and call sites. Use this to understand what a function depends on."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Function address as hex string or function name"}}},
+                    {"limit", {{"type", "integer"}, {"description", "Max callees to return (default 50)"}}}
+                }},
+                {"required", json::array({"address"})}
+            }}
+        },
+        // 22. get_basic_blocks
+        {
+            {"name", "get_basic_blocks"},
+            {"description", "Get basic blocks of a function with control flow information (successors and predecessors). Returns block addresses, sizes, and CFG edges. Useful for control flow analysis."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Function address as hex string or function name"}}}
+                }},
+                {"required", json::array({"address"})}
+            }}
+        },
+        // 23. get_callgraph
+        {
+            {"name", "get_callgraph"},
+            {"description", "Build a call graph starting from a root function, exploring callees recursively up to a specified depth. Returns nodes (functions) and edges (call relationships). Useful for understanding function dependencies."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Root function address as hex string or function name"}}},
+                    {"depth", {{"type", "integer"}, {"description", "Maximum recursion depth (default 3, max 10)"}}},
+                    {"max_nodes", {{"type", "integer"}, {"description", "Maximum total nodes to collect (default 100, max 500)"}}}
+                }},
+                {"required", json::array({"address"})}
+            }}
+        },
+        // 24. set_function_type
+        {
+            {"name", "set_function_type"},
+            {"description", "Apply a function type/prototype to a function. Sets the return type, parameter types, and calling convention. Use valid C function declaration syntax."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Function address as hex string or function name"}}},
+                    {"prototype", {{"type", "string"}, {"description", "C function prototype (e.g. 'int __cdecl func(char *buf, int size)')"}}}
+                }},
+                {"required", json::array({"address", "prototype"})}
+            }}
+        },
+        // 25. declare_type
+        {
+            {"name", "declare_type"},
+            {"description", "Declare a C type (struct, union, typedef, enum) in the local type library. The type becomes available for use in set_function_type and set_local_variable_type. Use standard C type syntax."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"declaration", {{"type", "string"}, {"description", "C type declaration (e.g. 'struct my_struct { int x; char *y; };')"}}}
+                }},
+                {"required", json::array({"declaration"})}
+            }}
+        },
+        // 26. define_function
+        {
+            {"name", "define_function"},
+            {"description", "Create/define a function at the specified address where IDA failed to recognize one automatically. If end_address is omitted, IDA will auto-detect the function boundary."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Start address of the function as hex string"}}},
+                    {"end_address", {{"type", "string"}, {"description", "End address (optional, IDA auto-detects if omitted)"}}}
+                }},
+                {"required", json::array({"address"})}
+            }}
+        },
+        // 27. get_stack_frame
+        {
+            {"name", "get_stack_frame"},
+            {"description", "Get stack frame layout for a function, including local variables, saved registers, and function arguments with their offsets, sizes, and types."},
+            {"input_schema", {
+                {"type", "object"},
+                {"properties", {
+                    {"address", {{"type", "string"}, {"description", "Function address as hex string or function name"}}}
+                }},
+                {"required", json::array({"address"})}
+            }}
         }
     });
 }

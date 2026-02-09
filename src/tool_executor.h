@@ -55,6 +55,14 @@ private:
     json tool_rename_local_variable(const json& input);
     json tool_set_decompiler_comment(const json& input);
     json tool_set_local_variable_type(const json& input);
+    json tool_list_imports(const json& input);
+    json tool_get_callees(const json& input);
+    json tool_get_basic_blocks(const json& input);
+    json tool_get_callgraph(const json& input);
+    json tool_set_function_type(const json& input);
+    json tool_declare_type(const json& input);
+    json tool_define_function(const json& input);
+    json tool_get_stack_frame(const json& input);
 };
 
 } // namespace ida_chat

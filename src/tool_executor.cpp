@@ -16,6 +16,8 @@
 #include <strlist.hpp>
 #include <entry.hpp>
 #include <nalt.hpp>
+#include <typeinf.hpp>
+#include <gdl.hpp>
 
 // Hex-Rays decompiler (optional)
 // Qt defines 'emit' as a macro which conflicts with hexrays codegen_t::emit()
@@ -28,6 +30,9 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
+#include <set>
+#include <map>
+#include <queue>
 
 namespace ida_chat {
 
@@ -127,6 +132,14 @@ void ToolExecutor::execute_tool(const QString& tool_name, const QString& input, 
         else if (name == "rename_local_variable") output = tool_rename_local_variable(input_json);
         else if (name == "set_decompiler_comment") output = tool_set_decompiler_comment(input_json);
         else if (name == "set_local_variable_type") output = tool_set_local_variable_type(input_json);
+        else if (name == "list_imports") output = tool_list_imports(input_json);
+        else if (name == "get_callees") output = tool_get_callees(input_json);
+        else if (name == "get_basic_blocks") output = tool_get_basic_blocks(input_json);
+        else if (name == "get_callgraph") output = tool_get_callgraph(input_json);
+        else if (name == "set_function_type") output = tool_set_function_type(input_json);
+        else if (name == "declare_type") output = tool_declare_type(input_json);
+        else if (name == "define_function") output = tool_define_function(input_json);
+        else if (name == "get_stack_frame") output = tool_get_stack_frame(input_json);
         else {
             output = {{"error", "Unknown tool: " + name}};
         }
@@ -921,6 +934,423 @@ json ToolExecutor::tool_set_local_variable_type(const json& input) {
     result["variable"] = var_name;
     result["new_type"] = type_str;
     result["success"] = true;
+    return result;
+}
+
+// --- Import callback context for enum_import_names ---
+struct import_enum_ctx {
+    json* imports;
+    int* count;
+    int* skipped;
+    int* total;
+    int offset;
+    int limit;
+    std::string module;
+};
+
+static int idaapi import_enum_cb(ea_t ea, const char* name, uval_t ord, void* ud) {
+    auto* ctx = static_cast<import_enum_ctx*>(ud);
+    (*ctx->total)++;
+
+    if (*ctx->skipped < ctx->offset) {
+        (*ctx->skipped)++;
+        return 1;
+    }
+    if (*ctx->count >= ctx->limit) return 0;
+
+    json imp;
+    imp["module"] = ctx->module;
+    imp["name"] = name ? name : "";
+    imp["address"] = hex_addr(ea);
+    if (ord != 0 && ord != static_cast<uval_t>(-1)) {
+        imp["ordinal"] = static_cast<int64_t>(ord);
+    }
+
+    ctx->imports->push_back(imp);
+    (*ctx->count)++;
+    return 1;
+}
+
+json ToolExecutor::tool_list_imports(const json& input) {
+    int offset = input.value("offset", 0);
+    int limit = std::min(input.value("limit", 100), 500);
+    std::string module_filter = input.value("module", "");
+
+    std::string filter_lower = module_filter;
+    std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
+
+    json imports = json::array();
+    int count = 0;
+    int skipped = 0;
+    int total = 0;
+
+    int n_modules = get_import_module_qty();
+
+    for (int mod_idx = 0; mod_idx < n_modules && count < limit; mod_idx++) {
+        qstring mod_name;
+        get_import_module_name(&mod_name, mod_idx);
+        std::string mod_str = mod_name.c_str();
+
+        if (!filter_lower.empty()) {
+            std::string mod_lower = mod_str;
+            std::transform(mod_lower.begin(), mod_lower.end(), mod_lower.begin(), ::tolower);
+            if (mod_lower.find(filter_lower) == std::string::npos)
+                continue;
+        }
+
+        import_enum_ctx ctx = { &imports, &count, &skipped, &total, offset, limit, mod_str };
+        enum_import_names(mod_idx, import_enum_cb, &ctx);
+    }
+
+    json result;
+    result["imports"] = imports;
+    result["count"] = count;
+    result["total"] = total;
+    result["offset"] = offset;
+    return result;
+}
+
+json ToolExecutor::tool_get_callees(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    ea_t ea = parse_address(addr_str);
+    int limit = input.value("limit", 50);
+
+    func_t* func = get_func(ea);
+    if (!func) {
+        return {{"error", "No function at address " + addr_str}};
+    }
+
+    json callees = json::array();
+    std::set<ea_t> seen;
+    int count = 0;
+
+    ea_t cur_ea = func->start_ea;
+    while (cur_ea < func->end_ea && count < limit) {
+        xrefblk_t xb;
+        for (bool ok = xb.first_from(cur_ea, XREF_ALL); ok; ok = xb.next_from()) {
+            if (xb.type == fl_CF || xb.type == fl_CN) {
+                func_t* callee = get_func(xb.to);
+                if (callee && seen.find(callee->start_ea) == seen.end()) {
+                    seen.insert(callee->start_ea);
+
+                    json c;
+                    c["address"] = hex_addr(callee->start_ea);
+                    qstring fname;
+                    get_func_name(&fname, callee->start_ea);
+                    c["name"] = fname.c_str();
+                    c["type"] = xref_type_name(xb.type);
+                    c["call_site"] = hex_addr(cur_ea);
+                    callees.push_back(c);
+                    count++;
+                    if (count >= limit) break;
+                }
+            }
+        }
+        cur_ea = next_head(cur_ea, func->end_ea);
+        if (cur_ea == BADADDR) break;
+    }
+
+    json result;
+    qstring fname;
+    get_func_name(&fname, func->start_ea);
+    result["function"] = fname.c_str();
+    result["address"] = hex_addr(func->start_ea);
+    result["callees"] = callees;
+    result["count"] = count;
+    return result;
+}
+
+json ToolExecutor::tool_get_basic_blocks(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    ea_t ea = parse_address(addr_str);
+
+    func_t* func = get_func(ea);
+    if (!func) {
+        return {{"error", "No function at address " + addr_str}};
+    }
+
+    qflow_chart_t flow("", func, func->start_ea, func->end_ea, 0);
+
+    json blocks = json::array();
+    for (int i = 0; i < flow.size(); i++) {
+        const qbasic_block_t& bb = flow.blocks[i];
+
+        json block;
+        block["id"] = i;
+        block["start"] = hex_addr(bb.start_ea);
+        block["end"] = hex_addr(bb.end_ea);
+        block["size"] = static_cast<int64_t>(bb.end_ea - bb.start_ea);
+
+        json succs = json::array();
+        for (int j = 0; j < flow.nsucc(i); j++) {
+            succs.push_back(flow.succ(i, j));
+        }
+        block["successors"] = succs;
+
+        json preds = json::array();
+        for (int j = 0; j < flow.npred(i); j++) {
+            preds.push_back(flow.pred(i, j));
+        }
+        block["predecessors"] = preds;
+
+        if (flow.nsucc(i) == 0) block["type"] = "exit";
+        else if (flow.nsucc(i) > 1) block["type"] = "conditional";
+        else block["type"] = "sequential";
+
+        blocks.push_back(block);
+    }
+
+    json result;
+    qstring fname;
+    get_func_name(&fname, func->start_ea);
+    result["function"] = fname.c_str();
+    result["address"] = hex_addr(func->start_ea);
+    result["blocks"] = blocks;
+    result["count"] = flow.size();
+    return result;
+}
+
+json ToolExecutor::tool_get_callgraph(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    ea_t root_ea = parse_address(addr_str);
+    int max_depth = std::min(input.value("depth", 3), 10);
+    int max_nodes = std::min(input.value("max_nodes", 100), 500);
+
+    func_t* root_func = get_func(root_ea);
+    if (!root_func) {
+        return {{"error", "No function at address " + addr_str}};
+    }
+
+    std::set<ea_t> visited;
+    std::map<ea_t, std::string> node_names;
+    json edges = json::array();
+
+    // BFS queue: (function_ea, depth)
+    std::queue<std::pair<ea_t, int>> queue;
+    queue.push({root_func->start_ea, 0});
+    visited.insert(root_func->start_ea);
+
+    {
+        qstring fname;
+        get_func_name(&fname, root_func->start_ea);
+        node_names[root_func->start_ea] = fname.c_str();
+    }
+
+    while (!queue.empty() && static_cast<int>(visited.size()) < max_nodes) {
+        auto [func_ea, depth] = queue.front();
+        queue.pop();
+
+        if (depth >= max_depth) continue;
+
+        func_t* func = get_func(func_ea);
+        if (!func) continue;
+
+        ea_t cur_ea = func->start_ea;
+        while (cur_ea < func->end_ea) {
+            xrefblk_t xb;
+            for (bool ok = xb.first_from(cur_ea, XREF_ALL); ok; ok = xb.next_from()) {
+                if (xb.type == fl_CF || xb.type == fl_CN) {
+                    func_t* callee = get_func(xb.to);
+                    if (callee) {
+                        ea_t callee_ea = callee->start_ea;
+
+                        json edge;
+                        edge["from"] = hex_addr(func_ea);
+                        edge["to"] = hex_addr(callee_ea);
+                        edges.push_back(edge);
+
+                        if (visited.find(callee_ea) == visited.end()
+                            && static_cast<int>(visited.size()) < max_nodes) {
+                            visited.insert(callee_ea);
+                            qstring cname;
+                            get_func_name(&cname, callee_ea);
+                            node_names[callee_ea] = cname.c_str();
+                            queue.push({callee_ea, depth + 1});
+                        }
+                    }
+                }
+            }
+            cur_ea = next_head(cur_ea, func->end_ea);
+            if (cur_ea == BADADDR) break;
+        }
+    }
+
+    json nodes = json::array();
+    for (const auto& [ea, name] : node_names) {
+        json node;
+        node["address"] = hex_addr(ea);
+        node["name"] = name;
+        node["is_root"] = (ea == root_func->start_ea);
+        nodes.push_back(node);
+    }
+
+    json result;
+    result["root"] = hex_addr(root_func->start_ea);
+    result["root_name"] = node_names[root_func->start_ea];
+    result["nodes"] = nodes;
+    result["edges"] = edges;
+    result["node_count"] = static_cast<int>(nodes.size());
+    result["edge_count"] = static_cast<int>(edges.size());
+    result["max_depth"] = max_depth;
+    return result;
+}
+
+json ToolExecutor::tool_set_function_type(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    std::string prototype = input.at("prototype").get<std::string>();
+    ea_t ea = parse_address(addr_str);
+
+    func_t* func = get_func(ea);
+    if (!func) {
+        return {{"error", "No function at address " + addr_str}};
+    }
+
+    tinfo_t new_type;
+    if (!parse_decl(&new_type, nullptr, nullptr, (prototype + ";").c_str(), PT_SIL)) {
+        return {{"error", "Failed to parse prototype: '" + prototype + "'. Use valid C syntax."}};
+    }
+
+    if (!new_type.is_func()) {
+        return {{"error", "Parsed type is not a function type. Provide a function signature."}};
+    }
+
+    if (!apply_tinfo(func->start_ea, new_type, TINFO_DEFINITE)) {
+        return {{"error", "Failed to apply function type to " + addr_str}};
+    }
+
+    json result;
+    result["address"] = hex_addr(func->start_ea);
+    qstring fname;
+    get_func_name(&fname, func->start_ea);
+    result["function"] = fname.c_str();
+    result["prototype"] = prototype;
+    result["success"] = true;
+    return result;
+}
+
+json ToolExecutor::tool_declare_type(const json& input) {
+    std::string decl = input.at("declaration").get<std::string>();
+
+    tinfo_t new_type;
+    qstring parsed_name;
+    if (!parse_decl(&new_type, &parsed_name, nullptr, (decl).c_str(), PT_TYP)) {
+        return {{"error", "Failed to parse type declaration: '" + decl + "'. Use valid C type syntax."}};
+    }
+
+    const char* final_name = parsed_name.c_str();
+    if (!final_name || !final_name[0]) {
+        return {{"error", "Could not determine type name from declaration. Use a named type (struct/union/typedef/enum)."}};
+    }
+
+    til_t* ti = get_idati();
+    if (!ti) {
+        return {{"error", "Failed to get IDA type library"}};
+    }
+
+    uint32 ordinal = alloc_type_ordinal(ti);
+    if (new_type.set_numbered_type(ti, ordinal, NTF_REPLACE, final_name) != TERR_OK) {
+        return {{"error", "Failed to add type '" + std::string(final_name) + "' to type library"}};
+    }
+
+    json result;
+    result["name"] = final_name;
+    result["declaration"] = decl;
+    result["success"] = true;
+    return result;
+}
+
+json ToolExecutor::tool_define_function(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    ea_t start_ea = parse_address(addr_str);
+
+    if (start_ea == BADADDR) {
+        return {{"error", "Invalid start address: " + addr_str}};
+    }
+
+    func_t* existing = get_func(start_ea);
+    if (existing && existing->start_ea == start_ea) {
+        qstring fname;
+        get_func_name(&fname, start_ea);
+        return {{"error", "Function already exists at " + addr_str + ": " + std::string(fname.c_str())}};
+    }
+
+    ea_t end_ea = BADADDR;
+    if (input.contains("end_address")) {
+        std::string end_str = input["end_address"].get<std::string>();
+        end_ea = parse_address(end_str);
+        if (end_ea == BADADDR) {
+            return {{"error", "Invalid end address: " + end_str}};
+        }
+    }
+
+    if (!add_func(start_ea, end_ea)) {
+        return {{"error", "Failed to create function at " + addr_str}};
+    }
+
+    func_t* new_func = get_func(start_ea);
+    if (!new_func) {
+        return {{"error", "Function creation reported success but function not found"}};
+    }
+
+    json result;
+    result["address"] = hex_addr(new_func->start_ea);
+    result["end"] = hex_addr(new_func->end_ea);
+    result["size"] = static_cast<int64_t>(new_func->size());
+    qstring fname;
+    get_func_name(&fname, new_func->start_ea);
+    result["name"] = fname.c_str();
+    result["success"] = true;
+    return result;
+}
+
+json ToolExecutor::tool_get_stack_frame(const json& input) {
+    std::string addr_str = input.at("address").get<std::string>();
+    ea_t ea = parse_address(addr_str);
+
+    func_t* func = get_func(ea);
+    if (!func) {
+        return {{"error", "No function at address " + addr_str}};
+    }
+
+    // IDA 9.x: frame is accessed via tinfo_t + get_udt_details
+    tinfo_t frame_type;
+    if (!get_func_frame(&frame_type, func)) {
+        return {{"error", "Function has no stack frame information"}};
+    }
+
+    udt_type_data_t udt;
+    if (!frame_type.get_udt_details(&udt)) {
+        return {{"error", "Failed to get frame details"}};
+    }
+
+    json members = json::array();
+    for (size_t i = 0; i < udt.size(); i++) {
+        const udm_t& udm = udt[i];
+
+        json m;
+        m["offset"] = static_cast<int64_t>(udm.offset / 8);  // bits to bytes
+        m["name"] = udm.name.c_str();
+        m["size"] = static_cast<int64_t>(udm.size / 8);  // bits to bytes
+
+        if (!udm.type.empty()) {
+            qstring type_str;
+            udm.type.print(&type_str);
+            m["type"] = type_str.c_str();
+        } else {
+            m["type"] = "unknown";
+        }
+
+        members.push_back(m);
+    }
+
+    json result;
+    qstring fname;
+    get_func_name(&fname, func->start_ea);
+    result["function"] = fname.c_str();
+    result["address"] = hex_addr(func->start_ea);
+    result["frame_size"] = static_cast<int64_t>(get_frame_size(func));
+    result["members"] = members;
+    result["member_count"] = static_cast<int>(members.size());
     return result;
 }
 

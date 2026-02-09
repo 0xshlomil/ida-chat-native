@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Native C++17 IDA Pro 9.x plugin that provides an AI-powered chat interface for reverse engineering. Uses Qt6 widgets for the UI and libcurl for HTTP. Supports Claude (Anthropic) and OpenAI-compatible API backends. The AI agent has access to 19 IDA SDK tools for binary analysis, decompilation, and IDB modification.
+Native C++17 IDA Pro 9.x plugin that provides an AI-powered chat interface for reverse engineering. Uses Qt6 widgets for the UI and libcurl for HTTP. Supports Claude (Anthropic) and OpenAI-compatible API backends. The AI agent has access to 27 IDA SDK tools for binary analysis, decompilation, and IDB modification.
 
 ## Build Commands
 
@@ -42,7 +42,7 @@ Tool execution flow: `WorkerThread` calls `ToolExecutor::execute_tool()` via `Bl
 | `chat_widget.cpp/h` | Qt UI: chat display (QTextBrowser), input (QPlainTextEdit), settings dialog, markdown rendering, Catppuccin theming |
 | `worker_thread.cpp/h` | Agentic loop: sends conversation + tools to API, handles tool_use responses, iterates up to max_turns |
 | `api_client.cpp/h` | libcurl HTTP client, supports Claude and OpenAI formats, normalizes OpenAI responses to Claude content-block format |
-| `tool_executor.cpp/h` | Dispatches tool calls to 19 IDA SDK wrapper methods, runs on main thread only |
+| `tool_executor.cpp/h` | Dispatches tool calls to 27 IDA SDK wrapper methods, runs on main thread only |
 | `tool_definitions.cpp/h` | JSON schemas for all tools (used in API requests) |
 | `config.cpp/h` | Loads from `~/.idapro/ida-chat.conf` and env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `IDA_CHAT_BACKEND`, `IDA_CHAT_API_URL`) |
 
