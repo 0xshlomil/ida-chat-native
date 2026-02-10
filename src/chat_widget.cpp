@@ -80,6 +80,18 @@ static QString markdown_to_html(const QString& md, const Theme& t, int font_size
     html.replace(QRegularExpression("<(h[1-6])>"),
         QString("<\\1 style='margin:8px 0 4px 0;'>"));
 
+    // Paragraphs — explicit spacing (QTextBrowser defaults to zero/minimal)
+    html.replace("<p>", "<p style='margin:6px 0;'>");
+
+    // Lists — spacing and indentation
+    html.replace("<ul>", "<ul style='margin:4px 0 4px 16px;'>");
+    html.replace("<ol>", "<ol style='margin:4px 0 4px 16px;'>");
+    html.replace("<li>", "<li style='margin:2px 0;'>");
+
+    // Bold/strong emphasis color
+    html.replace("<strong>",
+        QString("<strong style='color:%1;'>").arg(t.text));
+
     // Horizontal rules
     html.replace("<hr>",
         QString("<hr style='border:none;border-top:1px solid %1;margin:8px 0;'>")

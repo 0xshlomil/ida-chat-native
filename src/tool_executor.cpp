@@ -101,6 +101,84 @@ ToolExecutor::ToolExecutor(const Config& config, QObject* parent) : QObject(pare
     has_decompiler_ = init_hexrays_plugin();
 }
 
+bool ToolExecutor::ensure_decompiler() {
+    if (has_decompiler_)
+        return true;
+
+    // Try standard init (works if local decompiler is already loaded)
+    has_decompiler_ = init_hexrays_plugin();
+    if (has_decompiler_) {
+        msg("[ida-chat] Decompiler: init_hexrays_plugin() succeeded\n");
+        return true;
+    }
+    msg("[ida-chat] Decompiler: init_hexrays_plugin() failed, hexdsp=%p\n", get_hexdsp());
+
+    // Dump all registered plugins for diagnostics
+    msg("[ida-chat] Registered plugins:\n");
+    for (plugin_info_t* pi = get_plugins(); pi != nullptr; pi = pi->next) {
+        msg("[ida-chat]   name='%s' path='%s' loaded=%s\n",
+            pi->name ? pi->name : "(null)",
+            pi->path ? pi->path : "(null)",
+            pi->entry ? "yes" : "no");
+    }
+
+    // Force-load the decompiler plugin — covers cloud (hexcx*) and local (hexx*)
+    // variants across architectures. The cloud decompiler in IDA Free/Home
+    // loads late, so it may not be available during our plugin's init().
+    static const char* decompiler_plugins[] = {
+        "hexcx64", "hexcx86",                        // cloud x86
+        "hexcarm64", "hexcarm",                       // cloud ARM
+        "hexcmips64", "hexcmips",                     // cloud MIPS
+        "hexcppc64", "hexcppc",                       // cloud PPC
+        "hexcrv64",                                   // cloud RISC-V
+        "hexx64", "hexarm64", "hexarm",               // local
+        "hexmips64", "hexmips", "hexppc64", "hexppc",
+        "hexrv64",
+        nullptr
+    };
+    for (const char** p = decompiler_plugins; *p; ++p) {
+        plugin_t* found = find_plugin(*p, false);
+        if (found != nullptr) {
+            msg("[ida-chat] Found plugin '%s', loading...\n", *p);
+            load_plugin(*p);
+            has_decompiler_ = init_hexrays_plugin();
+            if (has_decompiler_) {
+                msg("[ida-chat] Decompiler available after loading '%s'\n", *p);
+                return true;
+            }
+            msg("[ida-chat] init_hexrays_plugin() still false after loading '%s'\n", *p);
+        }
+    }
+
+    // Try scanning registered plugins for any hex-rays variant
+    for (plugin_info_t* pi = get_plugins(); pi != nullptr; pi = pi->next) {
+        if (pi->path != nullptr && strstr(pi->path, "hex") != nullptr) {
+            msg("[ida-chat] Trying hex plugin: name='%s' path='%s'\n",
+                pi->name ? pi->name : "(null)", pi->path);
+            if (pi->entry == nullptr) {
+                invoke_plugin(pi);
+                has_decompiler_ = init_hexrays_plugin();
+                if (has_decompiler_) {
+                    msg("[ida-chat] Decompiler available after invoking '%s'\n", pi->name);
+                    return true;
+                }
+            } else {
+                msg("[ida-chat]   Already loaded, hexdsp=%p\n", get_hexdsp());
+            }
+        }
+    }
+
+    // Check if hexdsp became available through any of the above
+    if (get_hexdsp() != nullptr) {
+        msg("[ida-chat] hexdsp became available: %p\n", get_hexdsp());
+        has_decompiler_ = true;
+    } else {
+        msg("[ida-chat] Decompiler NOT available. hexdsp=null\n");
+    }
+
+    return has_decompiler_;
+}
+
 void ToolExecutor::execute_tool(const QString& tool_name, const QString& input, QString* result) {
     json input_json;
     try {
@@ -193,7 +271,12 @@ json ToolExecutor::tool_get_database_info(const json&) {
     // Counts
     info["function_count"] = static_cast<int>(get_func_qty());
     info["segment_count"] = static_cast<int>(get_segm_qty());
-    info["has_decompiler"] = has_decompiler_;
+    // Always report decompiler as available — modern IDA versions all have
+    // some form of decompiler (local or cloud). Let the actual decompile
+    // tool call produce a real error if it truly isn't available, rather
+    // than telling the LLM not to try.
+    ensure_decompiler();
+    info["has_decompiler"] = true;
 
     return info;
 }
@@ -344,7 +427,12 @@ json ToolExecutor::tool_get_disassembly(const json& input) {
 }
 
 json ToolExecutor::tool_decompile(const json& input) {
-    if (!has_decompiler_) {
+    // Try to init, but don't bail early — the cloud decompiler may work
+    // even if init_hexrays_plugin() returned false
+    ensure_decompiler();
+
+    // Safety check: hexrays dispatch must be registered or we'd crash
+    if (get_hexdsp() == nullptr) {
         return {{"error", "Hex-Rays decompiler is not available"}};
     }
 
@@ -362,13 +450,62 @@ json ToolExecutor::tool_decompile(const json& input) {
         return {{"error", "Decompilation failed: " + std::string(hf.str.c_str())}};
     }
 
+    // Mark decompiler as working (cloud decompiler confirmed available)
+    has_decompiler_ = true;
+
     const strvec_t& sv = cfunc->get_pseudocode();
+
+    // Build line_number -> address mapping using get_line_item
+    std::map<int, ea_t> line_addrs;
+    for (int i = 0; i < (int)sv.size(); i++) {
+        qstring clean = sv[i].line;
+        tag_remove(&clean);
+        // Find first non-whitespace column
+        int start_x = 0;
+        while (start_x < (int)clean.length() && qisspace(clean[start_x]))
+            start_x++;
+        // Try to find a ctree item at this line
+        ctree_item_t item;
+        for (int x = start_x; x < (int)clean.length(); x++) {
+            if (cfunc->get_line_item(sv[i].line.c_str(), x, false, nullptr, &item, nullptr)) {
+                ea_t item_ea = item.get_ea();
+                if (item_ea != BADADDR && item_ea >= func->start_ea && item_ea < func->end_ea) {
+                    line_addrs[i] = item_ea;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Build pseudocode with address annotations
     std::string pseudocode;
-    for (size_t i = 0; i < sv.size(); i++) {
+    json addr_map = json::object();
+    for (int i = 0; i < (int)sv.size(); i++) {
         qstring line = sv[i].line;
         tag_remove(&line);
+        auto it = line_addrs.find(i);
+        if (it != line_addrs.end()) {
+            std::string addr = hex_addr(it->second);
+            pseudocode += "/* " + addr + " */  ";
+            addr_map[std::to_string(i + 1)] = addr;  // 1-based line numbers
+        }
         pseudocode += line.c_str();
         pseudocode += "\n";
+    }
+
+    // Extract local variables
+    json vars = json::array();
+    lvars_t& lvars = *cfunc->get_lvars();
+    for (size_t i = 0; i < lvars.size(); i++) {
+        json var;
+        var["name"] = lvars[i].name.c_str();
+        qstring type_str;
+        if (lvars[i].type().print(&type_str)) {
+            var["type"] = type_str.c_str();
+        } else {
+            var["type"] = "unknown";
+        }
+        vars.push_back(var);
     }
 
     json result;
@@ -377,6 +514,8 @@ json ToolExecutor::tool_decompile(const json& input) {
     result["function"] = fname.c_str();
     result["address"] = hex_addr(func->start_ea);
     result["pseudocode"] = pseudocode;
+    result["line_addresses"] = addr_map;
+    result["variables"] = vars;
     return result;
 }
 
@@ -765,7 +904,8 @@ json ToolExecutor::tool_jump_to_address(const json& input) {
 }
 
 json ToolExecutor::tool_rename_local_variable(const json& input) {
-    if (!has_decompiler_) {
+    ensure_decompiler();
+    if (get_hexdsp() == nullptr) {
         return {{"error", "Hex-Rays decompiler is not available"}};
     }
 
@@ -827,7 +967,8 @@ json ToolExecutor::tool_rename_local_variable(const json& input) {
 }
 
 json ToolExecutor::tool_set_decompiler_comment(const json& input) {
-    if (!has_decompiler_) {
+    ensure_decompiler();
+    if (get_hexdsp() == nullptr) {
         return {{"error", "Hex-Rays decompiler is not available"}};
     }
 
@@ -870,7 +1011,8 @@ json ToolExecutor::tool_set_decompiler_comment(const json& input) {
 }
 
 json ToolExecutor::tool_set_local_variable_type(const json& input) {
-    if (!has_decompiler_) {
+    ensure_decompiler();
+    if (get_hexdsp() == nullptr) {
         return {{"error", "Hex-Rays decompiler is not available"}};
     }
 

@@ -35,6 +35,9 @@ private:
     Config config_;
     bool has_decompiler_ = false;
 
+    // Lazy init: retry init_hexrays_plugin() if not yet available
+    bool ensure_decompiler();
+
     // Individual tool implementations
     json tool_get_database_info(const json& input);
     json tool_list_functions(const json& input);
