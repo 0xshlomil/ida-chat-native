@@ -8,6 +8,35 @@
 
 namespace ida_chat {
 
+const char* WorkerThread::DEEP_ANALYSIS_SYSTEM_PROMPT =
+    "You are a reverse engineering expert embedded in IDA Pro. Your task is to perform "
+    "deep recursive analysis of binary functions.\n\n"
+    "## Analysis Procedure\n\n"
+    "For the function at the current address, perform these steps IN ORDER:\n\n"
+    "1. **Get current address** using `get_current_address`\n"
+    "2. **Decompile** the function using `decompile_function`\n"
+    "3. **Analyze** the function's purpose, behavior, and calling conventions\n"
+    "4. **Rename the function** if it has a generic name (sub_XXXX, FUN_XXXX) using `rename_address` — choose a descriptive name based on behavior\n"
+    "5. **Set function prototype** using `set_function_prototype` — determine correct return type, parameter types and meaningful parameter names\n"
+    "6. **Rename ALL local variables** using `rename_local_variable` — give every variable a meaningful snake_case name based on its usage\n"
+    "7. **Set variable types** using `set_local_variable_type` where the auto-detected type is wrong or too generic\n"
+    "8. **Detect struct patterns** — look for pointer accesses at fixed offsets (e.g., *(ptr+0x10), ptr->field_10) which suggest struct usage. If you find patterns, use `declare_type` to create appropriate struct definitions, then apply them with `set_local_variable_type`\n"
+    "9. **Add comments** using `set_decompiler_comment` for complex, non-obvious, or tricky logic\n"
+    "10. **Get callees** using `get_function_callees` to find all functions called by this one\n"
+    "11. **Recursively process each callee** — for each callee that is NOT:\n"
+    "    - An imported/library function (has a meaningful name already)\n"
+    "    - An already-named function (not sub_XXXX/FUN_XXXX)\n"
+    "    - A function you already processed in this session\n\n"
+    "## Important Rules\n\n"
+    "- After processing each function, re-decompile the PARENT to see improved pseudocode with resolved names\n"
+    "- Track which functions you've already processed to avoid infinite recursion\n"
+    "- Prioritize depth-first analysis — fully annotate a callee before moving to the next\n"
+    "- When naming variables, use context from the function's purpose (e.g., 'buf_size' not 'v3')\n"
+    "- For struct detection, look for patterns like: multiple accesses to the same base pointer at different offsets\n"
+    "- Be thorough but efficient — skip trivial wrapper functions\n"
+    "- Format progress updates in markdown, showing which function you're currently analyzing\n\n"
+    "Begin by getting the current address and starting the analysis.";
+
 WorkerThread::WorkerThread(ToolExecutor* executor, const Config& config, QObject* parent)
     : QThread(parent)
     , executor_(executor)
@@ -22,6 +51,16 @@ WorkerThread::~WorkerThread() {
 }
 
 void WorkerThread::send_message(const QString& message) {
+    max_turns_override_ = -1;
+    system_prompt_override_.clear();
+    pending_message_ = message;
+    start();
+}
+
+void WorkerThread::send_message(const QString& message, int max_turns_override,
+                                const std::string& system_prompt_override) {
+    max_turns_override_ = max_turns_override;
+    system_prompt_override_ = system_prompt_override;
     pending_message_ = message;
     start();
 }
@@ -48,6 +87,11 @@ void WorkerThread::run() {
 
     const bool is_openai = config_.backend == Backend::OPENAI;
 
+    // Determine effective max_turns and system prompt
+    int max_turns = (max_turns_override_ > 0) ? max_turns_override_ : config_.max_turns;
+    const char* system_prompt = system_prompt_override_.empty()
+        ? SYSTEM_PROMPT : system_prompt_override_.c_str();
+
     // Add user message to history
     json user_msg;
     user_msg["role"] = "user";
@@ -57,7 +101,7 @@ void WorkerThread::run() {
     json tools = get_tool_definitions();
 
     // Agentic loop
-    for (int turn = 0; turn < config_.max_turns; turn++) {
+    for (int turn = 0; turn < max_turns; turn++) {
         if (isInterruptionRequested()) {
             emit error_occurred("Cancelled");
             emit finished_processing();
@@ -66,12 +110,15 @@ void WorkerThread::run() {
 
         emit thinking(true);
 
-        // Send request (response body is always normalized to Claude shape)
-        ApiResponse response = client_->send_request(
+        // Send streaming request — emit text chunks as they arrive
+        ApiResponse response = client_->send_request_streaming(
             conversation_history_,
             tools,
-            SYSTEM_PROMPT,
-            config_.max_tokens
+            system_prompt,
+            config_.max_tokens,
+            [this](const std::string& chunk) {
+                emit text_chunk_received(QString::fromStdString(chunk));
+            }
         );
 
         emit thinking(false);

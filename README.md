@@ -5,8 +5,10 @@ Native C++ IDA Pro plugin for AI-powered binary analysis using Claude's tool_use
 ## Features
 
 - **Native C++ plugin** — no Python runtime, no MCP bridge, no external dependencies at runtime. Single `.so` loaded directly by IDA.
-- **Built-in chat UI** — Qt-based chat panel embedded in IDA with markdown rendering, Catppuccin theming (dark/light), and configurable font size.
+- **Built-in chat UI** — Qt-based chat panel embedded in IDA with full CommonMark markdown rendering (via [md4c](https://github.com/mity/md4c)), Catppuccin theming (dark/light), and configurable font size. Supports code blocks, tables, blockquotes, links, strikethrough, and more.
+- **Streaming responses** — text appears incrementally as the LLM generates via SSE streaming, with throttled re-rendering at ~20fps. Supports both Claude and OpenAI streaming formats.
 - **Agentic tool-use loop** — the AI autonomously chains multiple tool calls per query (up to configurable max turns) to perform deep analysis.
+- **Deep Analyze mode** — one-click recursive analysis that decompiles the function at cursor, renames variables, sets types, detects struct patterns, and recursively processes all callees (up to 100 turns with a specialized system prompt).
 - **Multiple backends** — Claude (Anthropic), OpenAI-compatible APIs, and local LLMs (llama.cpp, Ollama, etc.).
 
 ### Analysis Tools
@@ -180,6 +182,20 @@ export IDA_CHAT_API_URL=http://localhost:8080/v1/chat/completions
 2. Press **Ctrl+Shift+C** to toggle the chat panel (or View menu)
 3. Type a question and press Enter
 4. The agent will use IDA SDK tools to analyze the binary and respond
+
+### Deep Analyze
+
+Click the **Deep Analyze** button (orange) to recursively analyze the function at the cursor position. The agent will:
+
+1. Decompile the function and analyze its purpose
+2. Rename the function if it has a generic name (e.g. `sub_401000`)
+3. Set correct function prototype (return type, parameter types/names)
+4. Rename all local variables to meaningful names
+5. Detect struct patterns from fixed-offset pointer accesses and declare types
+6. Add comments for complex logic
+7. Recursively process all callees that aren't library/imported functions
+
+This runs with a 100-turn limit and a specialized system prompt optimized for thorough annotation.
 
 ### Example queries
 

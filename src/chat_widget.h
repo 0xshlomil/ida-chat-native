@@ -28,13 +28,16 @@ private slots:
     void on_cancel_clicked();
     void on_clear_clicked();
     void on_settings_clicked();
+    void on_deep_analyze_clicked();
     void on_text_received(const QString& text);
+    void on_text_chunk_received(const QString& chunk);
     void on_tool_called(const QString& tool_name, const QString& input_summary);
     void on_tool_result_received(const QString& tool_name, const QString& result_summary);
     void on_thinking(bool is_thinking);
     void on_error_occurred(const QString& error);
     void on_finished_processing();
     void on_blink_timer();
+    void on_stream_render_timer();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -47,6 +50,7 @@ private:
     void append_html(const QString& html);
     void set_processing(bool processing);
     void scroll_to_bottom();
+    void render_streaming_block();
 
     // UI components
     QLabel* header_ = nullptr;
@@ -55,14 +59,20 @@ private:
     QPushButton* send_button_ = nullptr;
     QPushButton* cancel_button_ = nullptr;
     QPushButton* clear_button_ = nullptr;
+    QPushButton* deep_analyze_button_ = nullptr;
     QPushButton* settings_button_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* blink_timer_ = nullptr;
+    QTimer* stream_render_timer_ = nullptr;
 
     // State
     bool processing_ = false;
     bool blink_state_ = false;
     QString current_assistant_text_;  // accumulate text for current response
+
+    // Streaming state
+    bool streaming_dirty_ = false;       // new chunks arrived since last render
+    int streaming_block_start_ = -1;     // cursor position where streaming block started
 
     // Components
     Config config_;

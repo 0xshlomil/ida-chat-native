@@ -24,15 +24,25 @@ public:
     // Start processing a user message
     void send_message(const QString& message);
 
+    // Start processing with overridden max_turns and/or system prompt
+    void send_message(const QString& message, int max_turns_override,
+                      const std::string& system_prompt_override = "");
+
     // Cancel the current operation
     void cancel();
 
     // Clear conversation history
     void clear_history();
 
+    // Deep analysis system prompt
+    static const char* DEEP_ANALYSIS_SYSTEM_PROMPT;
+
 signals:
     // Emitted when text content is received from the assistant
     void text_received(const QString& text);
+
+    // Emitted when a streaming text chunk arrives (for incremental display)
+    void text_chunk_received(const QString& chunk);
 
     // Emitted when a tool is called (for display in chat)
     void tool_called(const QString& tool_name, const QString& input_summary);
@@ -58,6 +68,10 @@ private:
     QString pending_message_;
     json conversation_history_;
     std::unique_ptr<ApiClient> client_;
+
+    // Per-request overrides (-1 / empty = use defaults)
+    int max_turns_override_ = -1;
+    std::string system_prompt_override_;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT =

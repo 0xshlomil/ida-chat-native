@@ -29,6 +29,15 @@ find_package(CURL REQUIRED)
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+# --- md4c (CommonMark parser + HTML renderer) ---
+add_library(md4c STATIC
+    third_party/md4c/md4c.c
+    third_party/md4c/md4c-html.c
+    third_party/md4c/entity.c
+)
+set_target_properties(md4c PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(md4c PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/md4c)
+
 # --- Create the Qt plugin ---
 ida_add_plugin(ida-chat
     TYPE QT
@@ -51,6 +60,7 @@ ida_add_plugin(ida-chat
     LIBRARIES
         nlohmann_json
         CURL::libcurl
+        md4c
     INCLUDES
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     DEFINES

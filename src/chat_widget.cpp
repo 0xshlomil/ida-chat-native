@@ -6,81 +6,89 @@
 #include <QHBoxLayout>
 #include <QScrollBar>
 #include <QApplication>
+#include <QDateTime>
 #include <QRegularExpression>
+
+extern "C" {
+#include <md4c-html.h>
+}
 
 namespace ida_chat {
 
-// Minimal markdown-to-HTML: code blocks, inline code, bold, italic, headers
+// md4c callback: accumulate HTML output
+static void md4c_process_output(const MD_CHAR* text, MD_SIZE size, void* userdata) {
+    auto* out = static_cast<std::string*>(userdata);
+    out->append(text, size);
+}
+
+// Convert markdown to styled HTML using md4c + Catppuccin inline styles
 static QString markdown_to_html(const QString& md, const Theme& t, int font_size) {
-    QString result;
-    QStringList lines = md.split('\n');
-    bool in_code_block = false;
+    std::string input = md.toStdString();
+    std::string html_out;
+    html_out.reserve(input.size() * 2);
+
+    unsigned flags = MD_FLAG_TABLES | MD_FLAG_STRIKETHROUGH | MD_FLAG_PERMISSIVEAUTOLINKS;
+    int ret = md_html(input.c_str(), static_cast<MD_SIZE>(input.size()),
+                      md4c_process_output, &html_out, flags, 0);
+
+    if (ret != 0) {
+        // Fallback: return escaped text
+        return md.toHtmlEscaped().replace("\n", "<br>");
+    }
+
+    QString html = QString::fromStdString(html_out);
     int code_font = font_size - 1;
 
-    for (const QString& line : lines) {
-        if (line.startsWith("```")) {
-            if (in_code_block) {
-                result += "</pre>";
-                in_code_block = false;
-            } else {
-                result += QString("<pre style='background:%1;color:%2;padding:8px;border-radius:4px;"
-                                  "font-family:monospace;font-size:%3px;white-space:pre-wrap;'>")
-                    .arg(t.base, t.text).arg(code_font);
-                in_code_block = true;
-            }
-            continue;
-        }
+    // Post-process: inject Catppuccin inline styles
+    // QTextBrowser doesn't support CSS classes/style blocks, only inline styles
 
-        if (in_code_block) {
-            // Escape HTML in code blocks
-            QString escaped = line.toHtmlEscaped();
-            result += escaped + "\n";
-            continue;
-        }
+    // Code blocks: <pre><code> → styled
+    html.replace(
+        QRegularExpression("<pre><code(?:\\s+class=\"language-(\\w+)\")?>"),
+        QString("<pre style='background:%1;color:%2;padding:8px;border-radius:4px;"
+                "font-family:monospace;font-size:%3px;white-space:pre-wrap;overflow-x:auto;margin:4px 0;'><code>")
+            .arg(t.base, t.text).arg(code_font));
 
-        QString processed = line;
+    // Inline code: <code> not inside <pre>
+    // We style all <code> tags, the pre>code ones already got their style from pre
+    html.replace(
+        QRegularExpression("<code>(?!\\s*\n)"),
+        QString("<code style='background:%1;color:%2;padding:1px 4px;border-radius:3px;font-family:monospace;font-size:%3px;'>")
+            .arg(t.surface0, t.text).arg(code_font));
 
-        // Headers
-        if (processed.startsWith("### ")) {
-            processed = "<h4>" + processed.mid(4).toHtmlEscaped() + "</h4>";
-        } else if (processed.startsWith("## ")) {
-            processed = "<h3>" + processed.mid(3).toHtmlEscaped() + "</h3>";
-        } else if (processed.startsWith("# ")) {
-            processed = "<h2>" + processed.mid(2).toHtmlEscaped() + "</h2>";
-        } else {
-            // Escape HTML first
-            processed = processed.toHtmlEscaped();
+    // Tables
+    html.replace("<table>",
+        QString("<table style='border-collapse:collapse;margin:6px 0;width:100%%;'>"));
+    html.replace("<th>",
+        QString("<th style='border:1px solid %1;padding:4px 8px;background:%2;font-weight:bold;text-align:left;'>")
+            .arg(t.surface1, t.surface0));
+    html.replace("<td>",
+        QString("<td style='border:1px solid %1;padding:4px 8px;'>")
+            .arg(t.surface1));
 
-            // Inline code (backticks)
-            QRegularExpression code_re("`([^`]+)`");
-            processed.replace(code_re,
-                QString("<code style='background:%1;color:%2;padding:1px 4px;border-radius:3px;font-family:monospace;'>\\1</code>")
-                    .arg(t.surface0, t.text));
+    // Blockquotes
+    html.replace("<blockquote>",
+        QString("<blockquote style='border-left:3px solid %1;margin:6px 0;padding:4px 12px;color:%2;'>")
+            .arg(t.overlay0, t.subtext));
 
-            // Bold
-            QRegularExpression bold_re("\\*\\*([^*]+)\\*\\*");
-            processed.replace(bold_re, "<b>\\1</b>");
+    // Links
+    html.replace(QRegularExpression("<a href=\"([^\"]+)\">"),
+        QString("<a href=\"\\1\" style='color:%1;text-decoration:underline;'>")
+            .arg(t.blue));
 
-            // Italic
-            QRegularExpression italic_re("\\*([^*]+)\\*");
-            processed.replace(italic_re, "<i>\\1</i>");
+    // Headings - add some spacing
+    html.replace(QRegularExpression("<(h[1-6])>"),
+        QString("<\\1 style='margin:8px 0 4px 0;'>"));
 
-            // Bullet points
-            if (processed.startsWith("- ") || processed.startsWith("* ")) {
-                processed = "&bull; " + processed.mid(2);
-            }
+    // Horizontal rules
+    html.replace("<hr>",
+        QString("<hr style='border:none;border-top:1px solid %1;margin:8px 0;'>")
+            .arg(t.surface1));
+    html.replace("<hr />",
+        QString("<hr style='border:none;border-top:1px solid %1;margin:8px 0;'>")
+            .arg(t.surface1));
 
-            processed += "<br>";
-        }
-
-        result += processed;
-    }
-
-    if (in_code_block) {
-        result += "</pre>";
-    }
-
-    return result;
+    return html;
 }
 
 ChatWidget::ChatWidget(QWidget* parent)
@@ -180,6 +188,11 @@ void ChatWidget::setup_ui() {
     connect(clear_button_, &QPushButton::clicked, this, &ChatWidget::on_clear_clicked);
     button_layout->addWidget(clear_button_);
 
+    deep_analyze_button_ = new QPushButton("Deep Analyze", this);
+    deep_analyze_button_->setToolTip("Recursively analyze function at cursor and all its callees");
+    connect(deep_analyze_button_, &QPushButton::clicked, this, &ChatWidget::on_deep_analyze_clicked);
+    button_layout->addWidget(deep_analyze_button_);
+
     button_layout->addStretch();
     layout->addLayout(button_layout);
 
@@ -187,6 +200,11 @@ void ChatWidget::setup_ui() {
     blink_timer_ = new QTimer(this);
     blink_timer_->setInterval(500);
     connect(blink_timer_, &QTimer::timeout, this, &ChatWidget::on_blink_timer);
+
+    // Streaming render timer (throttles re-rendering to ~20fps)
+    stream_render_timer_ = new QTimer(this);
+    stream_render_timer_->setInterval(50);
+    connect(stream_render_timer_, &QTimer::timeout, this, &ChatWidget::on_stream_render_timer);
 }
 
 void ChatWidget::apply_theme() {
@@ -264,11 +282,26 @@ void ChatWidget::apply_theme() {
                 "}"
                 "QPushButton:hover { background-color: %3; }")
             .arg(t.surface1, t.text, t.surface2));
+
+    deep_analyze_button_->setStyleSheet(
+        QString("QPushButton {"
+                "  background-color: %1;"
+                "  color: %2;"
+                "  border: none;"
+                "  border-radius: 4px;"
+                "  padding: 6px 16px;"
+                "  font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: %3; }"
+                "QPushButton:disabled { background-color: %4; color: %5; }")
+            .arg(t.peach, t.base, t.pink, t.surface1, t.overlay0));
 }
 
 void ChatWidget::connect_worker() {
     connect(worker_.get(), &WorkerThread::text_received,
             this, &ChatWidget::on_text_received);
+    connect(worker_.get(), &WorkerThread::text_chunk_received,
+            this, &ChatWidget::on_text_chunk_received);
     connect(worker_.get(), &WorkerThread::tool_called,
             this, &ChatWidget::on_tool_called);
     connect(worker_.get(), &WorkerThread::tool_result_received,
@@ -314,6 +347,7 @@ void ChatWidget::on_send_clicked() {
     set_processing(true);
 
     current_assistant_text_.clear();
+    streaming_block_start_ = -1;
     worker_->send_message(text);
 }
 
@@ -329,6 +363,20 @@ void ChatWidget::on_clear_clicked() {
         worker_->clear_history();
     }
     current_assistant_text_.clear();
+}
+
+void ChatWidget::on_deep_analyze_clicked() {
+    if (processing_ || !worker_) return;
+
+    QString trigger_msg = "Perform deep recursive analysis of the function at the current cursor position. "
+                          "Analyze it thoroughly, then recursively process all its callees.";
+
+    append_user_message("Deep Analyze (recursive)");
+    set_processing(true);
+    current_assistant_text_.clear();
+    streaming_block_start_ = -1;
+
+    worker_->send_message(trigger_msg, 100, WorkerThread::DEEP_ANALYSIS_SYSTEM_PROMPT);
 }
 
 void ChatWidget::on_settings_clicked() {
@@ -367,35 +415,45 @@ void ChatWidget::on_settings_clicked() {
 
 void ChatWidget::on_text_received(const QString& text) {
     current_assistant_text_ += text;
-    // Re-render accumulated text as markdown
-    Theme t = get_theme(config_.dark_mode);
-    QString html =
-        QString("<div style='margin:8px 0;padding:8px;background:%1;border-radius:6px;border-left:3px solid %2;'>")
-            .arg(t.surface0, t.blue)
-        + markdown_to_html(current_assistant_text_, t, config_.font_size) +
-        "</div>";
-
-    // Replace last assistant block or append
-    // For simplicity, we append the full response at finish_processing
-    // During streaming we just update status
     status_label_->setText("Receiving response...");
 }
 
 void ChatWidget::on_tool_called(const QString& tool_name, const QString& input_summary) {
     Theme t = get_theme(config_.dark_mode);
     int tool_fs = config_.font_size - 2;
+
+    // Extract a brief summary from the input JSON
+    QString brief = input_summary.left(80);
+    if (input_summary.length() > 80) brief += "...";
+
     QString html = QString(
-        "<div style='margin:4px 0;padding:4px 8px;color:%1;font-size:%2px;'>"
-        "&#128295; <b>%3</b>(%4)"
+        "<div style='margin:2px 0;padding:2px 4px;'>"
+        "<span style='background:%1;color:%2;padding:2px 8px;border-radius:10px;font-size:%3px;'>"
+        "&#9881; %4</span>"
+        "<span style='color:%5;font-size:%6px;margin-left:6px;'>%7</span>"
         "</div>"
-    ).arg(t.subtext).arg(tool_fs).arg(tool_name.toHtmlEscaped(), input_summary.toHtmlEscaped().left(100));
+    ).arg(t.surface1, t.subtext).arg(tool_fs)
+     .arg(tool_name.toHtmlEscaped(), t.overlay0).arg(tool_fs)
+     .arg(brief.toHtmlEscaped());
     append_html(html);
 }
 
 void ChatWidget::on_tool_result_received(const QString& tool_name, const QString& result_summary) {
-    Q_UNUSED(tool_name);
-    Q_UNUSED(result_summary);
-    // Tool results are fed back to the agent, no need to show raw JSON to user
+    Theme t = get_theme(config_.dark_mode);
+    int tool_fs = config_.font_size - 3;
+
+    // Show first ~80 chars of result
+    QString brief = result_summary.left(80).simplified();
+    if (result_summary.length() > 80) brief += "...";
+
+    if (!brief.isEmpty()) {
+        QString html = QString(
+            "<div style='margin:0 0 4px 20px;padding:2px 4px;'>"
+            "<span style='color:%1;font-size:%2px;font-style:italic;'>&#8627; %3</span>"
+            "</div>"
+        ).arg(t.overlay0).arg(tool_fs).arg(brief.toHtmlEscaped());
+        append_html(html);
+    }
     status_label_->setText("Processing tool results...");
 }
 
@@ -417,22 +475,43 @@ void ChatWidget::on_error_occurred(const QString& error) {
 }
 
 void ChatWidget::on_finished_processing() {
+    stream_render_timer_->stop();
+
     // Render final accumulated assistant text
     if (!current_assistant_text_.isEmpty()) {
         Theme t = get_theme(config_.dark_mode);
+        int label_fs = config_.font_size - 2;
+        QString timestamp = QDateTime::currentDateTime().toString("HH:mm");
         QString html =
-            QString("<div style='margin:8px 0;padding:8px;background:%1;border-radius:6px;border-left:3px solid %2;'>")
-                .arg(t.surface0, t.blue)
+            QString("<div style='margin:12px 0;padding:10px 12px;background:%1;border-radius:6px;border-left:3px solid %2;'>"
+                    "<div style='margin-bottom:4px;'>"
+                    "<b style='color:%3;font-size:%4px;'>Assistant</b>"
+                    "<span style='color:%5;font-size:%6px;margin-left:8px;'>%7</span>"
+                    "</div>")
+                .arg(t.surface0, t.blue, t.blue).arg(label_fs)
+                .arg(t.overlay0).arg(label_fs).arg(timestamp)
             + markdown_to_html(current_assistant_text_, t, config_.font_size) +
             "</div>";
-        append_html(html);
+
+        if (streaming_block_start_ >= 0) {
+            // Replace streaming block with final version (includes timestamp)
+            QTextCursor cursor(chat_display_->document());
+            cursor.setPosition(streaming_block_start_);
+            cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+            cursor.removeSelectedText();
+            cursor.insertHtml(html);
+        } else {
+            append_html(html);
+        }
     }
     current_assistant_text_.clear();
+    streaming_block_start_ = -1;
     set_processing(false);
     Theme t = get_theme(config_.dark_mode);
     status_label_->setText("Ready");
     status_label_->setStyleSheet(QString("color: %1;").arg(t.green));
     blink_timer_->stop();
+    scroll_to_bottom();
 }
 
 void ChatWidget::on_blink_timer() {
@@ -445,13 +524,70 @@ void ChatWidget::on_blink_timer() {
     }
 }
 
+void ChatWidget::on_text_chunk_received(const QString& chunk) {
+    current_assistant_text_ += chunk;
+    streaming_dirty_ = true;
+    if (!stream_render_timer_->isActive()) {
+        stream_render_timer_->start();
+    }
+    status_label_->setText("Receiving response...");
+}
+
+void ChatWidget::on_stream_render_timer() {
+    if (streaming_dirty_) {
+        render_streaming_block();
+        streaming_dirty_ = false;
+    }
+}
+
+void ChatWidget::render_streaming_block() {
+    if (current_assistant_text_.isEmpty()) return;
+
+    Theme t = get_theme(config_.dark_mode);
+    int label_fs = config_.font_size - 2;
+    QString html =
+        QString("<div style='margin:12px 0;padding:10px 12px;background:%1;border-radius:6px;border-left:3px solid %2;'>"
+                "<div style='margin-bottom:4px;'>"
+                "<b style='color:%3;font-size:%4px;'>Assistant</b>"
+                "<span style='color:%5;font-size:%6px;margin-left:8px;'>...</span>"
+                "</div>")
+            .arg(t.surface0, t.blue, t.blue).arg(label_fs)
+            .arg(t.overlay0).arg(label_fs)
+        + markdown_to_html(current_assistant_text_, t, config_.font_size) +
+        "</div>";
+
+    QTextCursor cursor(chat_display_->document());
+
+    if (streaming_block_start_ >= 0) {
+        // Remove the previous streaming block and replace
+        cursor.setPosition(streaming_block_start_);
+        cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+    } else {
+        // First chunk: record start position
+        cursor.movePosition(QTextCursor::End);
+        streaming_block_start_ = cursor.position();
+    }
+
+    cursor.insertHtml(html);
+    scroll_to_bottom();
+}
+
 void ChatWidget::append_user_message(const QString& text) {
     Theme t = get_theme(config_.dark_mode);
+    int label_fs = config_.font_size - 2;
+    QString timestamp = QDateTime::currentDateTime().toString("HH:mm");
     QString html = QString(
-        "<div style='margin:8px 0;padding:8px;background:%1;border-radius:6px;border-left:3px solid %2;'>"
-        "<b style='color:%2;'>You:</b> %3"
+        "<div style='margin:12px 0;padding:10px 12px;background:%1;border-radius:6px;border-left:3px solid %2;'>"
+        "<div style='margin-bottom:4px;'>"
+        "<b style='color:%2;font-size:%3px;'>You</b>"
+        "<span style='color:%4;font-size:%5px;margin-left:8px;'>%6</span>"
         "</div>"
-    ).arg(t.surface1, t.green, text.toHtmlEscaped());
+        "%7"
+        "</div>"
+    ).arg(t.surface1, t.green).arg(label_fs)
+     .arg(t.overlay0).arg(label_fs).arg(timestamp)
+     .arg(text.toHtmlEscaped().replace("\n", "<br>"));
     append_html(html);
 }
 
@@ -466,6 +602,7 @@ void ChatWidget::set_processing(bool processing) {
     processing_ = processing;
     send_button_->setVisible(!processing);
     cancel_button_->setVisible(processing);
+    deep_analyze_button_->setEnabled(!processing);
     input_edit_->setEnabled(!processing);
     if (!processing) {
         input_edit_->setFocus();

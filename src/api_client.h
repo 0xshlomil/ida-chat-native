@@ -2,6 +2,7 @@
 
 #include <string>
 #include <atomic>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 #include "config.h"
@@ -16,6 +17,9 @@ struct ApiResponse {
     std::string error;   // Error message if !success
     int http_code = 0;
 };
+
+// Callback for streaming text chunks
+using StreamCallback = std::function<void(const std::string& text_chunk)>;
 
 class ApiClient {
 public:
@@ -32,6 +36,14 @@ public:
                              const json& tools,
                              const std::string& system,
                              int max_tokens);
+
+    // Send a streaming request. Blocking call that invokes callback for each text chunk.
+    // Returns the full normalized response (same as non-streaming).
+    ApiResponse send_request_streaming(const json& messages,
+                                       const json& tools,
+                                       const std::string& system,
+                                       int max_tokens,
+                                       StreamCallback on_text_chunk);
 
     Backend backend() const { return backend_; }
 
