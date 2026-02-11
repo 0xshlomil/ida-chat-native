@@ -8,34 +8,50 @@
 
 namespace ida_chat {
 
-const char* WorkerThread::DEEP_ANALYSIS_SYSTEM_PROMPT =
-    "You are a reverse engineering expert embedded in IDA Pro. Your task is to perform "
-    "deep recursive analysis of binary functions.\n\n"
-    "## Analysis Procedure\n\n"
-    "For the function at the current address, perform these steps IN ORDER:\n\n"
-    "1. **Get current address** using `get_current_address`\n"
-    "2. **Decompile** the function using `decompile`\n"
-    "3. **Analyze** the function's purpose, behavior, and calling conventions\n"
-    "4. **Rename the function** if it has a generic name (sub_XXXX, FUN_XXXX) using `rename_address` — choose a descriptive name based on behavior\n"
-    "5. **Set function prototype** using `set_function_type` — determine correct return type, parameter types and meaningful parameter names\n"
-    "6. **Rename ALL local variables** using `rename_local_variable` — give every variable a meaningful snake_case name based on its usage\n"
-    "7. **Set variable types** using `set_local_variable_type` where the auto-detected type is wrong or too generic\n"
-    "8. **Detect struct patterns** — look for pointer accesses at fixed offsets (e.g., *(ptr+0x10), ptr->field_10) which suggest struct usage. If you find patterns, use `declare_type` to create appropriate struct definitions, then apply them with `set_local_variable_type`\n"
-    "9. **Add comments** using `set_decompiler_comment` for complex, non-obvious, or tricky logic — use the `line_addresses` from the decompile output to get the correct address for each pseudocode line\n"
-    "10. **Get callees** using `get_callees` to find all functions called by this one\n"
-    "11. **Recursively process each callee** — for each callee that is NOT:\n"
-    "    - An imported/library function (has a meaningful name already)\n"
-    "    - An already-named function (not sub_XXXX/FUN_XXXX)\n"
-    "    - A function you already processed in this session\n\n"
-    "## Important Rules\n\n"
-    "- After processing each function, re-decompile the PARENT to see improved pseudocode with resolved names\n"
-    "- Track which functions you've already processed to avoid infinite recursion\n"
-    "- Prioritize depth-first analysis — fully annotate a callee before moving to the next\n"
-    "- When naming variables, use context from the function's purpose (e.g., 'buf_size' not 'v3')\n"
-    "- For struct detection, look for patterns like: multiple accesses to the same base pointer at different offsets\n"
-    "- Be thorough but efficient — skip trivial wrapper functions\n"
-    "- Format progress updates in markdown, showing which function you're currently analyzing\n\n"
-    "Begin by getting the current address and starting the analysis.";
+const char* WorkerThread::ANALYSIS_LOOP_SYSTEM_PROMPT =
+    "You are a reverse engineering expert embedded in IDA Pro. You will work continuously "
+    "until stopped, analyzing one function at a time, depth-first through the call tree.\n\n"
+    "## Procedure — repeat for each function\n\n"
+    "1. `get_current_address` (first function only) or take the next callee from your queue\n"
+    "2. `decompile` the function\n"
+    "3. Read the code carefully. Determine what the function does and what part of the "
+    "program it belongs to (e.g., networking, crypto, parsing, init, etc.)\n"
+    "4. `rename_address` — pick a snake_case name that reflects its purpose. "
+    "Use a short component prefix so related functions group together "
+    "(e.g., `pkt_decrypt_payload`, `cfg_parse_entry`, `sess_validate_token`). "
+    "Keep the prefix consistent: if the parent is `pkt_handle_incoming`, its helpers "
+    "should also start with `pkt_` unless they clearly belong elsewhere.\n"
+    "5. `set_function_type` — set the correct return type, parameter types, and "
+    "meaningful parameter names\n"
+    "6. `rename_local_variable` for EVERY auto-named variable (v1, v2, a1, a2…) — "
+    "give each a descriptive snake_case name based on how it is used\n"
+    "7. `set_local_variable_type` where IDA guessed wrong (e.g., `int` that is really "
+    "a `char*`, or a void pointer that should be a struct pointer)\n"
+    "8. Look for struct patterns — if a pointer is dereferenced at multiple fixed offsets "
+    "(ptr->field_8, ptr->field_10, etc.), create a struct with `declare_type` and apply "
+    "it with `set_local_variable_type`\n"
+    "9. `set_decompiler_comment` on lines with non-obvious logic, magic numbers, or "
+    "important operations. Use `line_addresses` from the decompile output for targeting.\n"
+    "10. `decompile` again to verify your changes read well\n"
+    "11. `get_callees` — add unnamed callees (sub_XXX/FUN_XXX) to your queue. "
+    "Skip imports, library functions, and functions you already processed.\n"
+    "12. Move to the next callee in your queue. When a callee's subtree is done, "
+    "re-decompile the parent so the new names show up.\n\n"
+    "## Rules\n\n"
+    "- **Stay focused**: fully finish one function before moving to the next. "
+    "Do not jump around.\n"
+    "- **Depth-first**: go deep into the first callee, finish its subtree, then the next.\n"
+    "- **Track processed functions**: keep a list of addresses you've done. Never redo one.\n"
+    "- **Naming**: be specific and consistent. `decrypt_aes_block` beats `process_data`. "
+    "Related functions share a prefix.\n"
+    "- **Keep output short**: one line per function — what you renamed it to and why. "
+    "No long explanations.\n\n"
+    "Begin now.";
+
+const char* WorkerThread::ANALYSIS_LOOP_CONTINUATION =
+    "Continue. Process the next function in your queue. "
+    "If the queue is empty, use `get_current_address` to check if the cursor moved "
+    "to a new function and start from there.";
 
 WorkerThread::WorkerThread(ToolExecutor* executor, const Config& config, QObject* parent)
     : QThread(parent)
@@ -58,9 +74,11 @@ void WorkerThread::send_message(const QString& message) {
 }
 
 void WorkerThread::send_message(const QString& message, int max_turns_override,
-                                const std::string& system_prompt_override) {
+                                const std::string& system_prompt_override,
+                                bool loop_mode) {
     max_turns_override_ = max_turns_override;
     system_prompt_override_ = system_prompt_override;
+    loop_mode_ = loop_mode;
     pending_message_ = message;
     start();
 }
@@ -260,10 +278,22 @@ void WorkerThread::run() {
             continue;
         }
 
-        // end_turn or no more tool calls: done
+        // end_turn or no more tool calls
+        if (loop_mode_ && !isInterruptionRequested()) {
+            // Finalize current response block in UI before continuing
+            emit response_complete();
+
+            // Inject continuation message to keep the loop going
+            json cont_msg;
+            cont_msg["role"] = "user";
+            cont_msg["content"] = std::string(ANALYSIS_LOOP_CONTINUATION);
+            conversation_history_.push_back(cont_msg);
+            continue;
+        }
         break;
     }
 
+    loop_mode_ = false;
     emit finished_processing();
 }
 

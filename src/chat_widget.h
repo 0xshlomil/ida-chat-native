@@ -28,7 +28,9 @@ private slots:
     void on_cancel_clicked();
     void on_clear_clicked();
     void on_settings_clicked();
-    void on_deep_analyze_clicked();
+    void on_begin_analysis_clicked();
+    void on_end_analysis_clicked();
+    void on_response_complete();
     void on_text_received(const QString& text);
     void on_text_chunk_received(const QString& chunk);
     void on_tool_called(const QString& tool_name, const QString& input_summary);
@@ -59,7 +61,8 @@ private:
     QPushButton* send_button_ = nullptr;
     QPushButton* cancel_button_ = nullptr;
     QPushButton* clear_button_ = nullptr;
-    QPushButton* deep_analyze_button_ = nullptr;
+    QPushButton* begin_analysis_button_ = nullptr;
+    QPushButton* end_analysis_button_ = nullptr;
     QPushButton* settings_button_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* blink_timer_ = nullptr;
@@ -67,6 +70,7 @@ private:
 
     // State
     bool processing_ = false;
+    bool analysis_loop_active_ = false;
     bool blink_state_ = false;
     QString current_assistant_text_;  // accumulate text for current response
 

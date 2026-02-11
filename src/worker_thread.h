@@ -26,7 +26,8 @@ public:
 
     // Start processing with overridden max_turns and/or system prompt
     void send_message(const QString& message, int max_turns_override,
-                      const std::string& system_prompt_override = "");
+                      const std::string& system_prompt_override = "",
+                      bool loop_mode = false);
 
     // Cancel the current operation
     void cancel();
@@ -34,8 +35,9 @@ public:
     // Clear conversation history
     void clear_history();
 
-    // Deep analysis system prompt
-    static const char* DEEP_ANALYSIS_SYSTEM_PROMPT;
+    // Analysis loop system prompt and continuation message
+    static const char* ANALYSIS_LOOP_SYSTEM_PROMPT;
+    static const char* ANALYSIS_LOOP_CONTINUATION;
 
 signals:
     // Emitted when text content is received from the assistant
@@ -56,6 +58,9 @@ signals:
     // Emitted on error
     void error_occurred(const QString& error);
 
+    // Emitted when a single response is complete in loop mode (finalize UI block)
+    void response_complete();
+
     // Emitted when the full agentic loop is done
     void finished_processing();
 
@@ -72,6 +77,7 @@ private:
     // Per-request overrides (-1 / empty = use defaults)
     int max_turns_override_ = -1;
     std::string system_prompt_override_;
+    bool loop_mode_ = false;
 
     // System prompt
     static constexpr const char* SYSTEM_PROMPT =

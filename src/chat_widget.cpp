@@ -200,10 +200,16 @@ void ChatWidget::setup_ui() {
     connect(clear_button_, &QPushButton::clicked, this, &ChatWidget::on_clear_clicked);
     button_layout->addWidget(clear_button_);
 
-    deep_analyze_button_ = new QPushButton("Deep Analyze", this);
-    deep_analyze_button_->setToolTip("Recursively analyze function at cursor and all its callees");
-    connect(deep_analyze_button_, &QPushButton::clicked, this, &ChatWidget::on_deep_analyze_clicked);
-    button_layout->addWidget(deep_analyze_button_);
+    begin_analysis_button_ = new QPushButton("Begin Analysis Loop", this);
+    begin_analysis_button_->setToolTip("Continuously analyze the current function and all its callees recursively");
+    connect(begin_analysis_button_, &QPushButton::clicked, this, &ChatWidget::on_begin_analysis_clicked);
+    button_layout->addWidget(begin_analysis_button_);
+
+    end_analysis_button_ = new QPushButton("End Analysis Loop", this);
+    end_analysis_button_->setToolTip("Stop the continuous analysis loop");
+    end_analysis_button_->setVisible(false);
+    connect(end_analysis_button_, &QPushButton::clicked, this, &ChatWidget::on_end_analysis_clicked);
+    button_layout->addWidget(end_analysis_button_);
 
     button_layout->addStretch();
     layout->addLayout(button_layout);
@@ -295,7 +301,7 @@ void ChatWidget::apply_theme() {
                 "QPushButton:hover { background-color: %3; }")
             .arg(t.surface1, t.text, t.surface2));
 
-    deep_analyze_button_->setStyleSheet(
+    begin_analysis_button_->setStyleSheet(
         QString("QPushButton {"
                 "  background-color: %1;"
                 "  color: %2;"
@@ -307,6 +313,18 @@ void ChatWidget::apply_theme() {
                 "QPushButton:hover { background-color: %3; }"
                 "QPushButton:disabled { background-color: %4; color: %5; }")
             .arg(t.peach, t.base, t.pink, t.surface1, t.overlay0));
+
+    end_analysis_button_->setStyleSheet(
+        QString("QPushButton {"
+                "  background-color: %1;"
+                "  color: %2;"
+                "  border: none;"
+                "  border-radius: 4px;"
+                "  padding: 6px 16px;"
+                "  font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: %3; }")
+            .arg(t.red, t.base, t.pink));
 }
 
 void ChatWidget::connect_worker() {
@@ -322,6 +340,8 @@ void ChatWidget::connect_worker() {
             this, &ChatWidget::on_thinking);
     connect(worker_.get(), &WorkerThread::error_occurred,
             this, &ChatWidget::on_error_occurred);
+    connect(worker_.get(), &WorkerThread::response_complete,
+            this, &ChatWidget::on_response_complete);
     connect(worker_.get(), &WorkerThread::finished_processing,
             this, &ChatWidget::on_finished_processing);
 }
@@ -377,18 +397,61 @@ void ChatWidget::on_clear_clicked() {
     current_assistant_text_.clear();
 }
 
-void ChatWidget::on_deep_analyze_clicked() {
+void ChatWidget::on_begin_analysis_clicked() {
     if (processing_ || !worker_) return;
 
     QString trigger_msg = "Perform deep recursive analysis of the function at the current cursor position. "
                           "Analyze it thoroughly, then recursively process all its callees.";
 
-    append_user_message("Deep Analyze (recursive)");
+    append_user_message("Analysis Loop (continuous)");
+    analysis_loop_active_ = true;
     set_processing(true);
     current_assistant_text_.clear();
     streaming_block_start_ = -1;
 
-    worker_->send_message(trigger_msg, 100, WorkerThread::DEEP_ANALYSIS_SYSTEM_PROMPT);
+    worker_->send_message(trigger_msg, 10000, WorkerThread::ANALYSIS_LOOP_SYSTEM_PROMPT, true);
+}
+
+void ChatWidget::on_end_analysis_clicked() {
+    if (worker_) {
+        worker_->cancel();
+    }
+}
+
+void ChatWidget::on_response_complete() {
+    // Finalize the current streaming block without resetting processing state
+    stream_render_timer_->stop();
+
+    if (!current_assistant_text_.isEmpty()) {
+        Theme t = get_theme(config_.dark_mode);
+        int label_fs = config_.font_size - 2;
+        QString timestamp = QDateTime::currentDateTime().toString("HH:mm");
+        QString html =
+            QString("<div style='margin:12px 0;padding:10px 12px;background:%1;border-radius:6px;border-left:3px solid %2;'>"
+                    "<div style='margin-bottom:4px;'>"
+                    "<b style='color:%3;font-size:%4px;'>Assistant</b>"
+                    "<span style='color:%5;font-size:%6px;margin-left:8px;'>%7</span>"
+                    "</div>")
+                .arg(t.surface0, t.blue, t.blue).arg(label_fs)
+                .arg(t.overlay0).arg(label_fs).arg(timestamp)
+            + markdown_to_html(current_assistant_text_, t, config_.font_size) +
+            "</div>";
+
+        if (streaming_block_start_ >= 0) {
+            QTextCursor cursor(chat_display_->document());
+            cursor.setPosition(streaming_block_start_);
+            cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+            cursor.removeSelectedText();
+            cursor.insertHtml(html);
+        } else {
+            append_html(html);
+        }
+    }
+
+    // Reset streaming state for the next iteration
+    current_assistant_text_.clear();
+    streaming_block_start_ = -1;
+    scroll_to_bottom();
 }
 
 void ChatWidget::on_settings_clicked() {
@@ -518,6 +581,7 @@ void ChatWidget::on_finished_processing() {
     }
     current_assistant_text_.clear();
     streaming_block_start_ = -1;
+    analysis_loop_active_ = false;
     set_processing(false);
     Theme t = get_theme(config_.dark_mode);
     status_label_->setText("Ready");
@@ -613,8 +677,10 @@ void ChatWidget::append_html(const QString& html) {
 void ChatWidget::set_processing(bool processing) {
     processing_ = processing;
     send_button_->setVisible(!processing);
-    cancel_button_->setVisible(processing);
-    deep_analyze_button_->setEnabled(!processing);
+    cancel_button_->setVisible(processing && !analysis_loop_active_);
+    begin_analysis_button_->setVisible(!analysis_loop_active_);
+    begin_analysis_button_->setEnabled(!processing);
+    end_analysis_button_->setVisible(analysis_loop_active_);
     input_edit_->setEnabled(!processing);
     if (!processing) {
         input_edit_->setFocus();
