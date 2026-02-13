@@ -187,6 +187,11 @@ void ToolExecutor::execute_tool(const QString& tool_name, const QString& input, 
         input_json = json::object();
     }
 
+    // Suppress IDA dialog boxes during tool execution so the agent
+    // is never blocked waiting for user confirmation.
+    bool old_batch = batch;
+    batch = true;
+
     json output;
     std::string name = tool_name.toStdString();
 
@@ -225,6 +230,7 @@ void ToolExecutor::execute_tool(const QString& tool_name, const QString& input, 
         output = {{"error", std::string("Tool execution error: ") + e.what()}};
     }
 
+    batch = old_batch;
     *result = QString::fromStdString(output.dump());
 }
 
@@ -958,6 +964,9 @@ json ToolExecutor::tool_rename_local_variable(const json& input) {
         return {{"error", "Failed to rename variable '" + old_name + "' to '" + new_name + "'"}};
     }
 
+    // Invalidate cached decompilation so pseudocode windows refresh
+    mark_cfunc_dirty(func->start_ea);
+
     json result;
     result["function"] = hex_addr(func->start_ea);
     result["old_name"] = old_name;
@@ -1001,6 +1010,9 @@ json ToolExecutor::tool_set_decompiler_comment(const json& input) {
     loc.itp = ITP_SEMI;  // comment at end of statement (semicolon position)
     cfunc->set_user_cmt(loc, comment.c_str());
     cfunc->save_user_cmts();
+
+    // Invalidate cached decompilation so pseudocode windows refresh
+    mark_cfunc_dirty(func->start_ea);
 
     json result;
     result["function"] = hex_addr(func->start_ea);
@@ -1070,6 +1082,9 @@ json ToolExecutor::tool_set_local_variable_type(const json& input) {
     if (!ok) {
         return {{"error", "Failed to set type of variable '" + var_name + "' to '" + type_str + "'"}};
     }
+
+    // Invalidate cached decompilation so pseudocode windows refresh
+    mark_cfunc_dirty(func->start_ea);
 
     json result;
     result["function"] = hex_addr(func->start_ea);
@@ -1359,6 +1374,9 @@ json ToolExecutor::tool_set_function_type(const json& input) {
     if (!apply_tinfo(func->start_ea, new_type, TINFO_DEFINITE)) {
         return {{"error", "Failed to apply function type to " + addr_str}};
     }
+
+    // Invalidate cached decompilation so pseudocode windows refresh
+    mark_cfunc_dirty(func->start_ea);
 
     json result;
     result["address"] = hex_addr(func->start_ea);

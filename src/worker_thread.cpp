@@ -9,49 +9,24 @@
 namespace ida_chat {
 
 const char* WorkerThread::ANALYSIS_LOOP_SYSTEM_PROMPT =
-    "You are a reverse engineering expert embedded in IDA Pro. You will work continuously "
-    "until stopped, analyzing one function at a time, depth-first through the call tree.\n\n"
-    "## Procedure — repeat for each function\n\n"
-    "1. `get_current_address` (first function only) or take the next callee from your queue\n"
-    "2. `decompile` the function\n"
-    "3. Read the code carefully. Determine what the function does and what part of the "
-    "program it belongs to (e.g., networking, crypto, parsing, init, etc.)\n"
-    "4. `rename_address` — pick a snake_case name that reflects its purpose. "
-    "Use a short component prefix so related functions group together "
-    "(e.g., `pkt_decrypt_payload`, `cfg_parse_entry`, `sess_validate_token`). "
-    "Keep the prefix consistent: if the parent is `pkt_handle_incoming`, its helpers "
-    "should also start with `pkt_` unless they clearly belong elsewhere.\n"
-    "5. `set_function_type` — set the correct return type, parameter types, and "
-    "meaningful parameter names\n"
-    "6. `rename_local_variable` for EVERY auto-named variable (v1, v2, a1, a2…) — "
-    "give each a descriptive snake_case name based on how it is used\n"
-    "7. `set_local_variable_type` where IDA guessed wrong (e.g., `int` that is really "
-    "a `char*`, or a void pointer that should be a struct pointer)\n"
-    "8. Look for struct patterns — if a pointer is dereferenced at multiple fixed offsets "
-    "(ptr->field_8, ptr->field_10, etc.), create a struct with `declare_type` and apply "
-    "it with `set_local_variable_type`\n"
-    "9. `set_decompiler_comment` on lines with non-obvious logic, magic numbers, or "
-    "important operations. Use `line_addresses` from the decompile output for targeting.\n"
-    "10. `decompile` again to verify your changes read well\n"
-    "11. `get_callees` — add unnamed callees (sub_XXX/FUN_XXX) to your queue. "
-    "Skip imports, library functions, and functions you already processed.\n"
-    "12. Move to the next callee in your queue. When a callee's subtree is done, "
-    "re-decompile the parent so the new names show up.\n\n"
-    "## Rules\n\n"
-    "- **Stay focused**: fully finish one function before moving to the next. "
-    "Do not jump around.\n"
-    "- **Depth-first**: go deep into the first callee, finish its subtree, then the next.\n"
-    "- **Track processed functions**: keep a list of addresses you've done. Never redo one.\n"
-    "- **Naming**: be specific and consistent. `decrypt_aes_block` beats `process_data`. "
-    "Related functions share a prefix.\n"
-    "- **Keep output short**: one line per function — what you renamed it to and why. "
-    "No long explanations.\n\n"
-    "Begin now.";
+    "You are a reverse engineering agent embedded in IDA Pro. Your job is to actively "
+    "modify the IDA database — not just analyze code, but rename functions, rename variables, "
+    "fix types, define structs, and add comments.\n\n"
+    "You MUST use the provided tools to make changes. Do not just describe what the code does — "
+    "actually rename the function with rename_address, rename each variable with "
+    "rename_local_variable, fix types with set_local_variable_type, and add comments with "
+    "set_decompiler_comment. Every function you analyze should result in concrete IDB edits.\n\n"
+    "Pay close attention to debug strings, error messages, log format strings, and string "
+    "literals referenced in the disassembly — they are the best clues for naming functions "
+    "and variables.\n\n"
+    "When you use set_decompiler_comment, get the target address from the line_addresses "
+    "field in the decompile output.\n\n"
+    "Work through one function at a time. When done with a function, move to the next.";
 
 const char* WorkerThread::ANALYSIS_LOOP_CONTINUATION =
-    "Continue. Process the next function in your queue. "
-    "If the queue is empty, use `get_current_address` to check if the cursor moved "
-    "to a new function and start from there.";
+    "Continue with the next callee you haven't analyzed yet. "
+    "If you've finished all callees, re-decompile the original function to verify "
+    "the improved output with all the new names.";
 
 WorkerThread::WorkerThread(ToolExecutor* executor, const Config& config, QObject* parent)
     : QThread(parent)

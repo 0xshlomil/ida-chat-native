@@ -400,8 +400,23 @@ void ChatWidget::on_clear_clicked() {
 void ChatWidget::on_begin_analysis_clicked() {
     if (processing_ || !worker_) return;
 
-    QString trigger_msg = "Perform deep recursive analysis of the function at the current cursor position. "
-                          "Analyze it thoroughly, then recursively process all its callees.";
+    QString trigger_msg =
+        "Reverse engineer the function at the current cursor position.\n\n"
+        "For this function and each of its callees (use get_callees), do the following:\n"
+        "1. Get the full disassembly (use get_disassembly with count=1000) AND decompile it. "
+        "Read both to understand the function — the disassembly shows the real instructions, "
+        "string references, and call targets that the decompiler may obscure.\n"
+        "2. Pay close attention to debug/log strings, error messages, format strings, and "
+        "string literals — they are the strongest clues for what a function does and what "
+        "its variables represent.\n"
+        "3. Rename the function to reflect its purpose\n"
+        "4. Rename all auto-named local variables (v1, v2, a1, etc.) to meaningful names\n"
+        "5. Fix variable types where IDA guessed wrong\n"
+        "6. If you see pointer accesses at fixed offsets (ptr->field_8, etc.), "
+        "create a struct with declare_type and apply it\n"
+        "7. Add decompiler comments on non-obvious logic using addresses from line_addresses\n\n"
+        "Start with get_current_address, then work through each function one at a time. "
+        "Skip imports and library functions.";
 
     append_user_message("Analysis Loop (continuous)");
     analysis_loop_active_ = true;
